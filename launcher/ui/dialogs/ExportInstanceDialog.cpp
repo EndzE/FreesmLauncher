@@ -46,7 +46,9 @@
 #include "QObjectPtr.h"
 #include "archive/ExportToZipTask.h"
 #include "minecraft/MinecraftInstance.h"
+#include "minecraft/MinecraftLoadAndCheck.h"
 #include "minecraft/OfflineDependencyCollector.h"
+#include "minecraft/PackProfile.h"
 #include "tasks/SequentialTask.h"
 #include "StringUtils.h"
 #include "ui/dialogs/CustomMessageBox.h"
@@ -104,6 +106,7 @@ ExportInstanceDialog::ExportInstanceDialog(BaseInstance* instance, QWidget* pare
         connect(m_ui->includeLibrariesCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
         connect(m_ui->includeAssetsCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
         connect(m_ui->includeMetadataCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
+        connect(m_ui->downloadMissingButton, &QPushButton::clicked, this, &ExportInstanceDialog::downloadMissingDependencies);
     }
 }
 
@@ -188,43 +191,40 @@ void ExportInstanceDialog::doExport()
             collector.collect(offlineFiles, missingFiles);
 
             if (!missingFiles.isEmpty()) {
-                auto reply = QMessageBox::question(
-                    this,
-                    tr("Missing Offline Dependencies"),
-                    tr("Some required files are missing locally (%1 missing).\nWould you like to download them now so they can be included in the offline bundle?")
-                        .arg(missingFiles.size()),
-                    QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
-                    QMessageBox::Yes);
+                QMessageBox box(this);
+                box.setWindowTitle(tr("Missing Offline Dependencies"));
+                box.setIcon(QMessageBox::Warning);
+                box.setText(tr("This instance is missing main libraries that are required to play offline because it has never been launched on this machine.\n\n"
+                               "The instance should be run once on an online machine, or you can download the required dependencies now.\n\n"
+                               "Would you like to download them now without launching the instance?"));
+                auto downloadButton = box.addButton(tr("Download Now"), QMessageBox::AcceptRole);
+                auto exportAnywayButton = box.addButton(tr("Export Anyway"), QMessageBox::DestructiveRole);
+                auto cancelButton = box.addButton(QMessageBox::Cancel);
+                box.setDefaultButton(downloadButton);
 
-                if (reply == QMessageBox::Cancel) {
+                box.exec();
+                auto clicked = box.clickedButton();
+                if (clicked == cancelButton) {
                     QDialog::done(QDialog::Rejected);
                     return;
-                } else if (reply == QMessageBox::Yes) {
-                    auto updateTasks = mcInstance->createUpdateTask();
-                    if (!updateTasks.isEmpty()) {
-                        auto seqTask = makeShared<SequentialTask>();
-                        for (auto t : updateTasks) {
-                            seqTask->addTask(t);
-                        }
-                        ProgressDialog tDialog(this);
-                        tDialog.setSkipButton(true, tr("Abort"));
-                        auto res = tDialog.execWithTask(seqTask.get());
-                        if (res == QDialog::Rejected) {
-                            auto contReply = QMessageBox::warning(
-                                this,
-                                tr("Download Incomplete"),
-                                tr("Some files could not be downloaded. Do you want to continue exporting with the files currently available?"),
-                                QMessageBox::Yes | QMessageBox::No,
-                                QMessageBox::No);
-                            if (contReply != QMessageBox::Yes) {
-                                QDialog::done(QDialog::Rejected);
-                                return;
-                            }
+                } else if (clicked == downloadButton) {
+                    if (!downloadMissingDependencies()) {
+                        auto contReply = QMessageBox::warning(
+                            this,
+                            tr("Download Incomplete"),
+                            tr("Some files could not be downloaded. Do you want to continue exporting with the files currently available?"),
+                            QMessageBox::Yes | QMessageBox::No,
+                            QMessageBox::No);
+                        if (contReply != QMessageBox::Yes) {
+                            QDialog::done(QDialog::Rejected);
+                            return;
                         }
                     }
                     offlineFiles.clear();
                     missingFiles.clear();
                     collector.collect(offlineFiles, missingFiles);
+                } else if (clicked == exportAnywayButton) {
+                    // User explicitly chose to export without missing dependencies
                 }
             }
 
@@ -259,11 +259,13 @@ void ExportInstanceDialog::updateOfflineStats()
 {
     if (!m_ui->exportOfflineCheckBox->isChecked()) {
         m_ui->offlineInfoLabel->setText(tr("Includes all libraries, assets, and component metadata required to launch this instance offline without internet access."));
+        m_ui->downloadMissingButton->setVisible(false);
         return;
     }
 
     auto mcInstance = dynamic_cast<MinecraftInstance*>(m_instance);
     if (!mcInstance) {
+        m_ui->downloadMissingButton->setVisible(false);
         return;
     }
 
@@ -297,6 +299,7 @@ void ExportInstanceDialog::updateOfflineStats()
         }
         OfflineStats stats = m_statsWatcher->result();
         if (!m_ui->exportOfflineCheckBox->isChecked()) {
+            m_ui->downloadMissingButton->setVisible(false);
             return;
         }
 
@@ -307,11 +310,44 @@ void ExportInstanceDialog::updateOfflineStats()
                                 StringUtils::humanReadableFileSize(stats.metaSize),
                                 StringUtils::humanReadableFileSize(stats.totalSize));
         if (stats.missingCount > 0) {
-            info += "\n" + tr("Note: %1 required file(s) are missing locally and can be downloaded during export.").arg(stats.missingCount);
+            info += "\n" + tr("Note: Instance is missing required offline dependencies (e.g. not launched online yet).");
+            m_ui->downloadMissingButton->setVisible(true);
+        } else {
+            m_ui->downloadMissingButton->setVisible(false);
         }
         m_ui->offlineInfoLabel->setText(info);
     });
     m_statsWatcher->setFuture(future);
+}
+
+bool ExportInstanceDialog::downloadMissingDependencies()
+{
+    auto mcInstance = dynamic_cast<MinecraftInstance*>(m_instance);
+    if (!mcInstance) {
+        return false;
+    }
+
+    auto seqTask = makeShared<SequentialTask>();
+    // 1. Resolve components and metadata online
+    seqTask->addTask(makeShared<MinecraftLoadAndCheck>(mcInstance, Net::Mode::Online));
+    // 2. Download all folders, libraries, and assets
+    for (auto t : mcInstance->createUpdateTask()) {
+        seqTask->addTask(t);
+    }
+
+    ProgressDialog tDialog(this);
+    tDialog.setSkipButton(true, tr("Abort"));
+    auto res = tDialog.execWithTask(seqTask.get());
+    if (res != QDialog::Accepted) {
+        return false;
+    }
+
+    // Refresh pack profile after resolution
+    if (mcInstance->getPackProfile()) {
+        mcInstance->getPackProfile()->invalidateLaunchProfile();
+    }
+    updateOfflineStats();
+    return true;
 }
 
 void ExportInstanceDialog::done(int result)

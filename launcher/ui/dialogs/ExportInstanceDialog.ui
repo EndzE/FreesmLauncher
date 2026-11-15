@@ -109,6 +109,16 @@
         </item>
        </layout>
       </item>
+      <item>
+       <widget class="QPushButton" name="downloadMissingButton">
+        <property name="text">
+         <string>Download Missing Dependencies Now</string>
+        </property>
+        <property name="visible">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>

@@ -75,4 +75,5 @@ class ExportInstanceDialog : public QDialog {
     void rowsInserted(QModelIndex parent, int top, int bottom);
     void offlineExportToggled(bool checked);
     void updateOfflineStats();
+    bool downloadMissingDependencies();
 };

@@ -124,7 +124,12 @@ void OfflineDependencyCollector::collectLibraries(QList<OfflineFileEntry>& outFi
 
     auto profile = packProfile->getProfile();
     if (!profile) {
+        outMissing.append(QObject::tr("Launch profile is not initialized."));
         return;
+    }
+
+    if (packProfile->rowCount() > 0 && (profile->getLibraries().isEmpty() || !profile->getMainJar())) {
+        outMissing.append(QObject::tr("Required game libraries (instance has never been launched)."));
     }
 
     QSet<QString> addedArchivePaths;
@@ -261,11 +266,15 @@ void OfflineDependencyCollector::collectAssets(QList<OfflineFileEntry>& outFiles
 
     auto profile = packProfile->getProfile();
     if (!profile) {
+        outMissing.append(QObject::tr("Launch profile is not initialized."));
         return;
     }
 
     auto assets = profile->getMinecraftAssets();
     if (!assets || assets->id.isEmpty()) {
+        if (packProfile->rowCount() > 0) {
+            outMissing.append(QObject::tr("Game assets (instance has never been launched)."));
+        }
         return;
     }
 
