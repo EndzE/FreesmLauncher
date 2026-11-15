@@ -53,7 +53,7 @@ if errorlevel 1 (
 :: 2. Build
 echo.
 echo [2/3] Building FreesmLauncher (Release)...
-cmake --build build --config Release
+cmake --build build --config Release --target FreesmLauncher FreesmLauncher_updater FreesmLauncher_filelink
 if errorlevel 1 (
     echo [ERROR] Build failed.
     exit /b %errorlevel%
