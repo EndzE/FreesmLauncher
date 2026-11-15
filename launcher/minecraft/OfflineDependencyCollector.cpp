@@ -54,6 +54,8 @@ bool OfflineDependencyCollector::collect(QList<OfflineFileEntry>& outFiles, QStr
         return false;
     }
 
+    m_instance->updateRuntimeContext();
+
     auto packProfile = m_instance->getPackProfile();
     if (packProfile && !packProfile->isLoaded()) {
         packProfile->load();
@@ -172,123 +174,137 @@ void OfflineDependencyCollector::collectLibraries(QList<OfflineFileEntry>& outFi
         outMissing.append(QObject::tr("Required game libraries (instance has never been launched)."));
     }
 
-    QSet<QString> addedArchivePaths;
+    m_instance->updateRuntimeContext();
     auto runtimeContext = m_instance->runtimeContext();
     QString librariesBasePath = APPLICATION->metacache()->getBasePath("libraries");
     if (librariesBasePath.isEmpty()) {
         librariesBasePath = QDir("libraries").absolutePath();
     }
+    QString cleanLibBase = QDir::cleanPath(librariesBasePath);
+    QString cleanLocalLibBase = QDir::cleanPath(m_instance->getLocalLibraryPath());
 
-    QList<LibraryPtr> libPool;
-    if (profile->getMainJar()) {
-        libPool.append(profile->getMainJar());
+    QStringList allJars;
+    // 1. All classpath and native jars for current runtime
+    QStringList jars, nativeJars;
+    profile->getLibraryFiles(runtimeContext, jars, nativeJars, m_instance->getLocalLibraryPath(), m_instance->binRoot(), false);
+    allJars.append(jars);
+    allJars.append(nativeJars);
+
+    // 2. Both 32-bit and 64-bit native jars (for cross-architecture portability)
+    QStringList native32, native64;
+    for (const auto& lib : profile->getLibraries()) {
+        if (!lib) continue;
+        QStringList j, nat;
+        lib->getApplicableFiles(runtimeContext, j, nat, native32, native64, m_instance->getLocalLibraryPath());
     }
-    libPool.append(profile->getLibraries());
-    libPool.append(profile->getNativeLibraries());
-    libPool.append(profile->getMavenFiles());
+    for (const auto& lib : profile->getNativeLibraries()) {
+        if (!lib) continue;
+        QStringList j, nat;
+        lib->getApplicableFiles(runtimeContext, j, nat, native32, native64, m_instance->getLocalLibraryPath());
+    }
+    allJars.append(native32);
+    allJars.append(native64);
+
+    // 3. Agents
     for (const auto& agent : profile->getAgents()) {
         if (agent.library) {
-            libPool.append(agent.library);
+            QStringList agentJars, temp1, temp2, temp3;
+            agent.library->getApplicableFiles(runtimeContext, agentJars, temp1, temp2, temp3, m_instance->getLocalLibraryPath());
+            allJars.append(agentJars);
         }
     }
 
-    for (const auto& lib : libPool) {
-        if (!lib) {
-            continue;
+    // 4. Maven files (e.g. Forge installer, universal, shim)
+    for (const auto& mf : profile->getMavenFiles()) {
+        if (mf) {
+            QStringList mavenJars, temp1, temp2, temp3;
+            mf->getApplicableFiles(runtimeContext, mavenJars, temp1, temp2, temp3, m_instance->getLocalLibraryPath());
+            allJars.append(mavenJars);
         }
+    }
 
-        // Local libraries are already in the instance folder
-        if (lib->isLocal()) {
-            continue;
+    // 5. Check for Forge client jar (generated on first launch or by processors)
+    for (const auto& lib : profile->getLibraries()) {
+        if (lib && lib->rawName().groupId() == "net.minecraftforge" && lib->rawName().artifactId() == "forge") {
+            GradleSpecifier clientSpec = lib->rawName();
+            clientSpec.setClassifier("client");
+            QString clientRel = clientSpec.toPath();
+            QString clientDisk = FS::PathCombine(librariesBasePath, clientRel);
+            allJars.append(clientDisk);
         }
+    }
 
-        if (lib->isNative()) {
-            QString rawSuffix = lib->storageSuffix(runtimeContext);
-            QStringList requiredSuffixes;
+    // 6. Inspect classifiers from mojangDownloads and nativeClassifiers
+    QList<LibraryPtr> allLibs;
+    if (profile->getMainJar()) allLibs.append(profile->getMainJar());
+    allLibs.append(profile->getLibraries());
+    allLibs.append(profile->getNativeLibraries());
+    allLibs.append(profile->getMavenFiles());
 
-            if (rawSuffix.contains("${arch}")) {
-                QString natArch = runtimeContext.javaArchitecture.isEmpty() ? "64" : runtimeContext.javaArchitecture;
-                auto s = rawSuffix;
-                s.replace("${arch}", natArch);
-                requiredSuffixes.append(s);
-            } else if (!rawSuffix.contains("INVALID")) {
-                requiredSuffixes.append(rawSuffix);
-            }
-
-            for (const auto& suffix : requiredSuffixes) {
-                QString archivePath = ".offline/libraries/" + suffix;
-                if (addedArchivePaths.contains(archivePath)) {
-                    continue;
-                }
-                addedArchivePaths.insert(archivePath);
-
-                QString diskPath = FS::PathCombine(librariesBasePath, suffix);
-                QFileInfo fi(diskPath);
-                if (fi.exists() && fi.isFile()) {
-                    outFiles.append({ diskPath, archivePath, fi.size() });
-                } else {
-                    outMissing.append(diskPath);
-                }
-            }
-
-            // Also inspect cached native classifiers for cross-platform portability
-            QStringList extraClassifiers = lib->nativeClassifiers().values();
-            if (lib->mojangDownloads()) {
-                extraClassifiers.append(lib->mojangDownloads()->classifiers.keys());
-            }
-
-            for (const auto& classifier : extraClassifiers) {
-                GradleSpecifier spec = lib->rawName();
-                spec.setClassifier(classifier);
-                QString suffix = spec.toPath();
-                if (suffix.contains("${arch}")) {
-                    for (const auto& arch : { "32", "64" }) {
-                        auto s = suffix;
-                        s.replace("${arch}", arch);
-                        QString archivePath = ".offline/libraries/" + s;
-                        if (addedArchivePaths.contains(archivePath)) {
-                            continue;
-                        }
-                        QString diskPath = FS::PathCombine(librariesBasePath, s);
-                        QFileInfo fi(diskPath);
-                        if (fi.exists() && fi.isFile()) {
-                            addedArchivePaths.insert(archivePath);
-                            outFiles.append({ diskPath, archivePath, fi.size() });
-                        }
-                    }
-                } else {
-                    QString archivePath = ".offline/libraries/" + suffix;
-                    if (addedArchivePaths.contains(archivePath)) {
-                        continue;
-                    }
-                    QString diskPath = FS::PathCombine(librariesBasePath, suffix);
-                    QFileInfo fi(diskPath);
-                    if (fi.exists() && fi.isFile()) {
-                        addedArchivePaths.insert(archivePath);
-                        outFiles.append({ diskPath, archivePath, fi.size() });
+    for (const auto& lib : allLibs) {
+        if (!lib || lib->isLocal()) continue;
+        QStringList classifiers = lib->nativeClassifiers().values();
+        if (lib->mojangDownloads()) {
+            classifiers.append(lib->mojangDownloads()->classifiers.keys());
+        }
+        for (const auto& classifier : classifiers) {
+            GradleSpecifier spec = lib->rawName();
+            spec.setClassifier(classifier);
+            QString suffix = spec.toPath();
+            if (suffix.contains("${arch}")) {
+                for (const auto& arch : { "32", "64" }) {
+                    auto s = suffix;
+                    s.replace("${arch}", arch);
+                    QString diskPath = FS::PathCombine(librariesBasePath, s);
+                    if (QFileInfo::exists(diskPath)) {
+                        allJars.append(diskPath);
                     }
                 }
-            }
-        } else {
-            // Classpath or normal library
-            QString suffix = lib->storageSuffix(runtimeContext);
-            if (suffix.isEmpty()) {
-                continue;
-            }
-
-            QString archivePath = ".offline/libraries/" + suffix;
-            if (addedArchivePaths.contains(archivePath)) {
-                continue;
-            }
-            addedArchivePaths.insert(archivePath);
-
-            QString diskPath = FS::PathCombine(librariesBasePath, suffix);
-            QFileInfo fi(diskPath);
-            if (fi.exists() && fi.isFile()) {
-                outFiles.append({ diskPath, archivePath, fi.size() });
             } else {
-                outMissing.append(diskPath);
+                QString diskPath = FS::PathCombine(librariesBasePath, suffix);
+                if (QFileInfo::exists(diskPath)) {
+                    allJars.append(diskPath);
+                }
             }
+        }
+    }
+
+    QSet<QString> addedArchivePaths;
+    for (auto jarPath : allJars) {
+        jarPath = QDir::cleanPath(jarPath);
+        QString relPath;
+        if (jarPath.startsWith(cleanLibBase, Qt::CaseInsensitive)) {
+            relPath = jarPath.mid(cleanLibBase.length());
+            if (relPath.startsWith('/')) {
+                relPath.remove(0, 1);
+            }
+        } else if (jarPath.startsWith(cleanLocalLibBase, Qt::CaseInsensitive)) {
+            // Local library inside instance directory - will be exported with the instance files
+            continue;
+        } else {
+            if (QDir::isRelativePath(jarPath)) {
+                relPath = jarPath;
+                jarPath = FS::PathCombine(cleanLibBase, relPath);
+            } else {
+                relPath = QFileInfo(jarPath).fileName();
+            }
+        }
+
+        if (relPath.isEmpty()) {
+            continue;
+        }
+
+        QString archivePath = ".offline/libraries/" + relPath;
+        if (addedArchivePaths.contains(archivePath)) {
+            continue;
+        }
+        addedArchivePaths.insert(archivePath);
+
+        QFileInfo fi(jarPath);
+        if (fi.exists() && fi.isFile()) {
+            outFiles.append({ jarPath, archivePath, fi.size() });
+        } else {
+            outMissing.append(jarPath);
         }
     }
 }
