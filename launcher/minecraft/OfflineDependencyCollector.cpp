@@ -295,7 +295,7 @@ void OfflineDependencyCollector::collectLibraries(QList<OfflineFileEntry>& outFi
 
     // 5. Check for Forge client jar (generated on first launch or by processors)
     for (const auto& lib : profile->getLibraries()) {
-        if (lib && lib->rawName().groupId() == "net.minecraftforge" && lib->rawName().artifactId() == "forge") {
+        if (lib && (lib->rawName().groupId() == "net.minecraftforge" || lib->rawName().groupId() == "net.neoforged") && lib->rawName().artifactId() == "forge") {
             GradleSpecifier clientSpec = lib->rawName();
             clientSpec.setClassifier("client");
             QString clientRel = clientSpec.toPath();
@@ -496,21 +496,36 @@ void OfflineDependencyCollector::collectLibraries(QList<OfflineFileEntry>& outFi
             }
         } else if (uid == "net.neoforged") {
             // NeoForge patched client jar:
-            // NeoForge 21.1+ (1.21+) uses net.neoforged:neoforge:<version>:client
-            // NeoForge 20.x (1.20.x) uses net.neoforged:minecraft-client-patched:<version>
+            // 1. NeoForge 1.20.1 (47.1.x): net.neoforged:forge:<mcVersion>-<version>:client
+            // 2. NeoForge 20.2 - 20.4: net.neoforged:neoforge:<version>:client
+            // 3. NeoForge 20.5+ / 21.x+: net.neoforged:minecraft-client-patched:<version>
+            QString fullVer = (!mcVersion.isEmpty() && !version.contains(mcVersion))
+                                  ? QString("%1-%2").arg(mcVersion, version)
+                                  : version;
+
+            GradleSpecifier neo1201Spec(QString("net.neoforged:forge:%1:client").arg(fullVer));
+            GradleSpecifier neoLegacySpec(QString("net.neoforged:forge:%1:client").arg(version));
             GradleSpecifier neoforgeClientSpec(QString("net.neoforged:neoforge:%1:client").arg(version));
             GradleSpecifier patchedSpec(QString("net.neoforged:minecraft-client-patched:%1").arg(version));
 
+            QString neo1201Disk = FS::PathCombine(librariesBasePath, neo1201Spec.toPath());
+            QString neoLegacyDisk = FS::PathCombine(librariesBasePath, neoLegacySpec.toPath());
             QString neoDisk = FS::PathCombine(librariesBasePath, neoforgeClientSpec.toPath());
             QString patchedDisk = FS::PathCombine(librariesBasePath, patchedSpec.toPath());
 
-            if (QFileInfo::exists(neoDisk)) {
+            if (QFileInfo::exists(neo1201Disk)) {
+                allJars.append(neo1201Disk);
+            } else if (QFileInfo::exists(neoDisk)) {
                 allJars.append(neoDisk);
             } else if (QFileInfo::exists(patchedDisk)) {
                 allJars.append(patchedDisk);
+            } else if (QFileInfo::exists(neoLegacyDisk)) {
+                allJars.append(neoLegacyDisk);
             } else {
                 // Not found on disk: instance is unlaunched, record expected client jar as missing
-                if (!version.isEmpty() && ::Version(version) >= ::Version("21.0")) {
+                if (mcVersion == "1.20.1" || version.startsWith("47.")) {
+                    allJars.append(neo1201Disk);
+                } else if (version.startsWith("20.2") || version.startsWith("20.3") || version.startsWith("20.4")) {
                     allJars.append(neoDisk);
                 } else {
                     allJars.append(patchedDisk);
