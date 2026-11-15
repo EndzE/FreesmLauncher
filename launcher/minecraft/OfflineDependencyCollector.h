@@ -58,6 +58,7 @@ public:
     static OfflineStats computeStats(const QList<OfflineFileEntry>& files, const QStringList& missing);
 
 private:
+    void ensureDependenciesResolved();
     void collectMetadata(QList<OfflineFileEntry>& outFiles, QStringList& outMissing);
     void collectLibraries(QList<OfflineFileEntry>& outFiles, QStringList& outMissing);
     void collectAssets(QList<OfflineFileEntry>& outFiles, QStringList& outMissing);

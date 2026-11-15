@@ -33,6 +33,7 @@
 #include "archive/ArchiveReader.h"
 #include "meta/BaseEntity.h"
 #include "meta/Index.h"
+#include "meta/JsonFormat.h"
 #include "meta/Version.h"
 #include "minecraft/AssetsUtils.h"
 #include "minecraft/Component.h"
@@ -58,16 +59,69 @@ bool OfflineDependencyCollector::collect(QList<OfflineFileEntry>& outFiles, QStr
 
     m_instance->updateRuntimeContext();
 
-    auto packProfile = m_instance->getPackProfile();
-    if (packProfile && !packProfile->isLoaded()) {
-        packProfile->load();
-    }
+    ensureDependenciesResolved();
 
     collectMetadata(outFiles, outMissingFiles);
     collectLibraries(outFiles, outMissingFiles);
     collectAssets(outFiles, outMissingFiles);
 
     return outMissingFiles.isEmpty();
+}
+
+void OfflineDependencyCollector::ensureDependenciesResolved()
+{
+    auto packProfile = m_instance->getPackProfile();
+    if (!packProfile) {
+        return;
+    }
+    if (!packProfile->isLoaded()) {
+        packProfile->load();
+    }
+
+    bool addedAny = false;
+    for (int i = 0; i < packProfile->rowCount(); ++i) {
+        auto comp = packProfile->getComponent(i);
+        if (!comp) continue;
+
+        QList<Meta::Require> requiresToCheck;
+        for (const auto& req : comp->m_cachedRequires) {
+            requiresToCheck.append(req);
+        }
+        auto vfile = comp->getVersionFile();
+        if (vfile) {
+            for (const auto& req : vfile->m_requires) {
+                if (!requiresToCheck.contains(req)) {
+                    requiresToCheck.append(req);
+                }
+            }
+        }
+
+        for (const auto& req : requiresToCheck) {
+            if (req.uid.isEmpty() || packProfile->getComponent(req.uid)) {
+                continue;
+            }
+            QString version = !req.equalsVersion.isEmpty() ? req.equalsVersion : req.suggests;
+            if (version.isEmpty()) {
+                if (req.uid == "org.lwjgl") {
+                    version = "2.9.1";
+                } else if (req.uid == "org.lwjgl3") {
+                    version = "3.1.2";
+                }
+            }
+            if (!version.isEmpty()) {
+                auto newComp = makeShared<Component>(packProfile, req.uid);
+                newComp->m_version = version;
+                newComp->m_dependencyOnly = true;
+                packProfile->appendComponent(newComp);
+                addedAny = true;
+            }
+        }
+    }
+
+    if (addedAny) {
+        packProfile->saveNow();
+        packProfile->invalidateLaunchProfile();
+    }
 }
 
 void OfflineDependencyCollector::collectMetadata(QList<OfflineFileEntry>& outFiles, QStringList& outMissing)

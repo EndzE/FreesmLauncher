@@ -385,6 +385,7 @@ bool ExportInstanceDialog::downloadMissingDependencies()
 
     // Refresh pack profile after resolution
     if (mcInstance->getPackProfile()) {
+        mcInstance->saveNow();
         mcInstance->getPackProfile()->invalidateLaunchProfile();
     }
     updateOfflineStats();
