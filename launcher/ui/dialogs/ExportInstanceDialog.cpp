@@ -109,7 +109,6 @@ ExportInstanceDialog::ExportInstanceDialog(BaseInstance* instance, QWidget* pare
         connect(m_ui->includeLibrariesCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
         connect(m_ui->includeAssetsCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
         connect(m_ui->includeMetadataCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
-        connect(m_ui->downloadMissingButton, &QPushButton::clicked, this, &ExportInstanceDialog::downloadMissingDependencies);
 
         offlineExportToggled(true);
     }
@@ -188,33 +187,13 @@ bool ExportInstanceDialog::validateAndConfirmOffline()
     box.setWindowTitle(tr("Missing Offline Dependencies"));
     box.setIcon(QMessageBox::Warning);
     box.setText(tr("Instance missing main libraries that is required to play offline. Instance should be run once on online machine.\n\n"
-                   "Would you like to download these dependencies now without launching the instance?"));
-    auto downloadButton = box.addButton(tr("Download Now"), QMessageBox::AcceptRole);
-    auto exportAnywayButton = box.addButton(tr("Export Anyway"), QMessageBox::DestructiveRole);
+                   "Do you want to continue exporting anyway?"));
+    auto exportAnywayButton = box.addButton(tr("Export Anyway"), QMessageBox::AcceptRole);
     auto cancelButton = box.addButton(QMessageBox::Cancel);
-    box.setDefaultButton(downloadButton);
+    box.setDefaultButton(cancelButton);
 
     box.exec();
-    auto clicked = box.clickedButton();
-    if (clicked == cancelButton) {
-        return false;
-    } else if (clicked == downloadButton) {
-        if (!downloadMissingDependencies()) {
-            auto contReply = QMessageBox::warning(
-                this,
-                tr("Download Incomplete"),
-                tr("Some dependencies could not be downloaded. Do you want to continue exporting anyway?"),
-                QMessageBox::Yes | QMessageBox::No,
-                QMessageBox::No);
-            if (contReply != QMessageBox::Yes) {
-                return false;
-            }
-        }
-        return true;
-    } else if (clicked == exportAnywayButton) {
-        return true;
-    }
-    return false;
+    return box.clickedButton() == exportAnywayButton;
 }
 
 void ExportInstanceDialog::doExport()
@@ -275,6 +254,9 @@ void ExportInstanceDialog::offlineExportToggled(bool checked)
     m_ui->includeLibrariesCheckBox->setEnabled(checked);
     m_ui->includeAssetsCheckBox->setEnabled(checked);
     m_ui->includeMetadataCheckBox->setEnabled(checked);
+    if (!checked) {
+        m_ui->offlineWarningLabel->setVisible(false);
+    }
     updateOfflineStats();
 }
 
@@ -282,17 +264,18 @@ void ExportInstanceDialog::updateOfflineStats()
 {
     if (!m_ui->exportOfflineCheckBox->isChecked()) {
         m_ui->offlineInfoLabel->setText(tr("Includes all libraries, assets, and component metadata required to launch this instance offline without internet access."));
-        m_ui->downloadMissingButton->setVisible(false);
+        m_ui->offlineWarningLabel->setVisible(false);
         return;
     }
 
     auto mcInstance = dynamic_cast<MinecraftInstance*>(m_instance);
     if (!mcInstance) {
-        m_ui->downloadMissingButton->setVisible(false);
+        m_ui->offlineWarningLabel->setVisible(false);
         return;
     }
 
     m_ui->offlineInfoLabel->setText(tr("Calculating offline dependencies..."));
+    m_ui->offlineWarningLabel->setVisible(false);
 
     OfflineExportOptions options;
     options.includeLibraries = m_ui->includeLibrariesCheckBox->isChecked();
@@ -322,7 +305,7 @@ void ExportInstanceDialog::updateOfflineStats()
         }
         OfflineStats stats = m_statsWatcher->result();
         if (!m_ui->exportOfflineCheckBox->isChecked()) {
-            m_ui->downloadMissingButton->setVisible(false);
+            m_ui->offlineWarningLabel->setVisible(false);
             return;
         }
 
@@ -332,65 +315,21 @@ void ExportInstanceDialog::updateOfflineStats()
                                 QString::number(stats.metaCount),
                                 StringUtils::humanReadableFileSize(stats.metaSize),
                                 StringUtils::humanReadableFileSize(stats.totalSize));
-        if (stats.missingCount > 0) {
-            info += "\n" + tr("Note: Instance is missing required offline dependencies (e.g. not launched online yet).");
-            m_ui->downloadMissingButton->setVisible(true);
-        } else {
-            m_ui->downloadMissingButton->setVisible(false);
-        }
         m_ui->offlineInfoLabel->setText(info);
+
+        if (stats.missingCount > 0) {
+            m_ui->offlineWarningLabel->setText(
+                "<span style=\"color: #e67e22; font-weight: bold;\">⚠️ Note:</span> "
+                "<span style=\"color: #e67e22; font-weight: bold;\">Instance is missing required offline dependencies (e.g. not launched online yet). "
+                "Instance should be run once on online machine before exporting.</span>");
+            m_ui->offlineWarningLabel->setVisible(true);
+        } else {
+            m_ui->offlineWarningLabel->setVisible(false);
+        }
     });
     m_statsWatcher->setFuture(future);
 }
 
-bool ExportInstanceDialog::downloadMissingDependencies()
-{
-    auto mcInstance = dynamic_cast<MinecraftInstance*>(m_instance);
-    if (!mcInstance) {
-        return false;
-    }
-
-    auto seqTask = makeShared<SequentialTask>();
-
-    // 1. Ensure all component metadata is downloaded online
-    auto packProfile = mcInstance->getPackProfile();
-    if (packProfile) {
-        for (int i = 0; i < packProfile->rowCount(); ++i) {
-            auto comp = packProfile->getComponent(i);
-            if (!comp) continue;
-            QString uid = comp->getID();
-            QString version = comp->getVersion();
-            if (!uid.isEmpty() && !version.isEmpty()) {
-                QString metaPath = FS::PathCombine(QDir("meta").absolutePath(), uid + "/" + version + ".json");
-                if (!QFileInfo::exists(metaPath)) {
-                    seqTask->addTask(APPLICATION->metadataIndex()->loadVersion(uid, version, Net::Mode::Online));
-                }
-            }
-        }
-    }
-
-    // 2. Resolve components and metadata online
-    seqTask->addTask(makeShared<MinecraftLoadAndCheck>(mcInstance, Net::Mode::Online));
-    // 3. Download all folders, libraries, and assets
-    for (auto t : mcInstance->createUpdateTask()) {
-        seqTask->addTask(t);
-    }
-
-    ProgressDialog tDialog(this);
-    tDialog.setSkipButton(true, tr("Abort"));
-    auto res = tDialog.execWithTask(seqTask.get());
-    if (res != QDialog::Accepted) {
-        return false;
-    }
-
-    // Refresh pack profile after resolution
-    if (mcInstance->getPackProfile()) {
-        mcInstance->saveNow();
-        mcInstance->getPackProfile()->invalidateLaunchProfile();
-    }
-    updateOfflineStats();
-    return true;
-}
 
 void ExportInstanceDialog::done(int result)
 {

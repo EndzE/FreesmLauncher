@@ -113,9 +113,12 @@
        </layout>
       </item>
       <item>
-       <widget class="QPushButton" name="downloadMissingButton">
+       <widget class="QLabel" name="offlineWarningLabel">
         <property name="text">
-         <string>Download Missing Dependencies Now</string>
+         <string/>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
         </property>
         <property name="visible">
          <bool>false</bool>
