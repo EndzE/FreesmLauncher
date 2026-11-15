@@ -38,6 +38,7 @@ class BaseEntity {
     virtual QUrl url() const;
     bool isLoaded() const;
     LoadStatus status() const;
+    bool loadLocalFile();
 
     /* for parsers */
     void setSha256(QString sha256);

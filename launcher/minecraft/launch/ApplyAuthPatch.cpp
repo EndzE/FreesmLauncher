@@ -49,7 +49,12 @@ void ApplyAuthPatch::onMetaRequestDone(const Meta::VersionList::Ptr& versionList
 {
     switch (m_stage) {
         case Stage::Ely: {
-            auto libraries = m_instance->getPackProfile()->getProfile()->getLibraries();
+            auto profile = m_instance->getPackProfile() ? m_instance->getPackProfile()->getProfile() : nullptr;
+            if (!profile) {
+                emitFailed(tr("Failed to load instance profile."));
+                return;
+            }
+            auto libraries = profile->getLibraries();
 
             auto authlibIt =
                 std::ranges::find_if(libraries, [](const LibraryPtr& p) { return p && p->artifactPrefix() == "com.mojang:authlib"; });
@@ -125,7 +130,12 @@ void ApplyAuthPatch::apply(const Meta::Version::Ptr& version)
 {
     switch (m_stage) {
         case Stage::Ely: {
-            QList<LibraryPtr>& libraries = m_instance->getPackProfile()->getProfile()->libraries();
+            auto profile = m_instance->getPackProfile() ? m_instance->getPackProfile()->getProfile() : nullptr;
+            if (!profile) {
+                emitFailed(tr("Failed to load instance profile."));
+                return;
+            }
+            QList<LibraryPtr>& libraries = profile->libraries();
             auto it = std::ranges::find_if(libraries, [](const LibraryPtr& p) { return p && p->artifactPrefix() == "com.mojang:authlib"; });
             if (it != libraries.end()) {
                 libraries.erase(it);

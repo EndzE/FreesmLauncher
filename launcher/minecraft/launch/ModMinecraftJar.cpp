@@ -62,7 +62,11 @@ void ModMinecraftJar::executeTask()
 
     // create temporary modded jar, if needed
     auto components = m_inst->getPackProfile();
-    auto profile = components->getProfile();
+    auto profile = components ? components->getProfile() : nullptr;
+    if (!profile) {
+        emitFailed(tr("Failed to load instance profile."));
+        return;
+    }
     auto jarMods = m_inst->getJarMods();
     if (jarMods.size()) {
         auto mainJar = profile->getMainJar();

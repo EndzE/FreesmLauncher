@@ -107,6 +107,8 @@ ExportInstanceDialog::ExportInstanceDialog(BaseInstance* instance, QWidget* pare
         connect(m_ui->includeAssetsCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
         connect(m_ui->includeMetadataCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
         connect(m_ui->downloadMissingButton, &QPushButton::clicked, this, &ExportInstanceDialog::downloadMissingDependencies);
+
+        offlineExportToggled(true);
     }
 }
 
@@ -154,6 +156,64 @@ void SaveIcon(BaseInstance* m_instance)
     pixmap.save(FS::PathCombine(m_instance->instanceRoot(), iconKey + ".png"));
 }
 
+bool ExportInstanceDialog::validateAndConfirmOffline()
+{
+    if (!m_ui->exportOfflineCheckBox->isChecked()) {
+        return true;
+    }
+
+    auto mcInstance = dynamic_cast<MinecraftInstance*>(m_instance);
+    if (!mcInstance) {
+        return true;
+    }
+
+    OfflineExportOptions options;
+    options.includeLibraries = m_ui->includeLibrariesCheckBox->isChecked();
+    options.includeAssets = m_ui->includeAssetsCheckBox->isChecked();
+    options.includeMetadata = m_ui->includeMetadataCheckBox->isChecked();
+
+    OfflineDependencyCollector collector(mcInstance, options);
+    QList<OfflineFileEntry> offlineFiles;
+    QStringList missingFiles;
+    collector.collect(offlineFiles, missingFiles);
+
+    if (missingFiles.isEmpty()) {
+        return true;
+    }
+
+    QMessageBox box(this);
+    box.setWindowTitle(tr("Missing Offline Dependencies"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(tr("Instance missing main libraries that is required to play offline. Instance should be run once on online machine.\n\n"
+                   "Would you like to download these dependencies now without launching the instance?"));
+    auto downloadButton = box.addButton(tr("Download Now"), QMessageBox::AcceptRole);
+    auto exportAnywayButton = box.addButton(tr("Export Anyway"), QMessageBox::DestructiveRole);
+    auto cancelButton = box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(downloadButton);
+
+    box.exec();
+    auto clicked = box.clickedButton();
+    if (clicked == cancelButton) {
+        return false;
+    } else if (clicked == downloadButton) {
+        if (!downloadMissingDependencies()) {
+            auto contReply = QMessageBox::warning(
+                this,
+                tr("Download Incomplete"),
+                tr("Some dependencies could not be downloaded. Do you want to continue exporting anyway?"),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No);
+            if (contReply != QMessageBox::Yes) {
+                return false;
+            }
+        }
+        return true;
+    } else if (clicked == exportAnywayButton) {
+        return true;
+    }
+    return false;
+}
+
 void ExportInstanceDialog::doExport()
 {
     auto name = FS::RemoveInvalidFilenameChars(m_instance->name());
@@ -161,7 +221,6 @@ void ExportInstanceDialog::doExport()
     const QString output = QFileDialog::getSaveFileName(this, tr("Export %1").arg(m_instance->name()),
                                                         FS::PathCombine(QDir::homePath(), name + ".zip"), "Zip (*.zip)", nullptr);
     if (output.isEmpty()) {
-        QDialog::done(QDialog::Rejected);
         return;
     }
 
@@ -171,7 +230,6 @@ void ExportInstanceDialog::doExport()
     if (!MMCZip::collectFileListRecursively(m_instance->instanceRoot(), nullptr, &files,
                                             std::bind(&FileIgnoreProxy::filterFile, m_proxyModel, std::placeholders::_1))) {
         QMessageBox::warning(this, tr("Error"), tr("Unable to export instance"));
-        QDialog::done(QDialog::Rejected);
         return;
     }
 
@@ -189,44 +247,6 @@ void ExportInstanceDialog::doExport()
             QList<OfflineFileEntry> offlineFiles;
             QStringList missingFiles;
             collector.collect(offlineFiles, missingFiles);
-
-            if (!missingFiles.isEmpty()) {
-                QMessageBox box(this);
-                box.setWindowTitle(tr("Missing Offline Dependencies"));
-                box.setIcon(QMessageBox::Warning);
-                box.setText(tr("This instance is missing main libraries that are required to play offline because it has never been launched on this machine.\n\n"
-                               "The instance should be run once on an online machine, or you can download the required dependencies now.\n\n"
-                               "Would you like to download them now without launching the instance?"));
-                auto downloadButton = box.addButton(tr("Download Now"), QMessageBox::AcceptRole);
-                auto exportAnywayButton = box.addButton(tr("Export Anyway"), QMessageBox::DestructiveRole);
-                auto cancelButton = box.addButton(QMessageBox::Cancel);
-                box.setDefaultButton(downloadButton);
-
-                box.exec();
-                auto clicked = box.clickedButton();
-                if (clicked == cancelButton) {
-                    QDialog::done(QDialog::Rejected);
-                    return;
-                } else if (clicked == downloadButton) {
-                    if (!downloadMissingDependencies()) {
-                        auto contReply = QMessageBox::warning(
-                            this,
-                            tr("Download Incomplete"),
-                            tr("Some files could not be downloaded. Do you want to continue exporting with the files currently available?"),
-                            QMessageBox::Yes | QMessageBox::No,
-                            QMessageBox::No);
-                        if (contReply != QMessageBox::Yes) {
-                            QDialog::done(QDialog::Rejected);
-                            return;
-                        }
-                    }
-                    offlineFiles.clear();
-                    missingFiles.clear();
-                    collector.collect(offlineFiles, missingFiles);
-                } else if (clicked == exportAnywayButton) {
-                    // User explicitly chose to export without missing dependencies
-                }
-            }
 
             QByteArray manifestData = collector.createManifest(offlineFiles);
             task->addExtraFile(".offline/manifest.json", manifestData);
@@ -354,6 +374,9 @@ void ExportInstanceDialog::done(int result)
 {
     m_proxyModel->saveBlockedPathsToFile(ignoreFileName());
     if (result == QDialog::Accepted) {
+        if (!validateAndConfirmOffline()) {
+            return;
+        }
         doExport();
         return;
     }

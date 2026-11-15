@@ -29,6 +29,10 @@
 #include "Application.h"
 #include "BuildConfig.h"
 #include "FileSystem.h"
+#include "Json.h"
+#include "meta/BaseEntity.h"
+#include "meta/Index.h"
+#include "meta/Version.h"
 #include "minecraft/AssetsUtils.h"
 #include "minecraft/Component.h"
 #include "minecraft/LaunchProfile.h"
@@ -50,6 +54,11 @@ bool OfflineDependencyCollector::collect(QList<OfflineFileEntry>& outFiles, QStr
         return false;
     }
 
+    auto packProfile = m_instance->getPackProfile();
+    if (packProfile && !packProfile->isLoaded()) {
+        packProfile->load();
+    }
+
     collectMetadata(outFiles, outMissingFiles);
     collectLibraries(outFiles, outMissingFiles);
     collectAssets(outFiles, outMissingFiles);
@@ -66,6 +75,10 @@ void OfflineDependencyCollector::collectMetadata(QList<OfflineFileEntry>& outFil
     auto packProfile = m_instance->getPackProfile();
     if (!packProfile) {
         return;
+    }
+
+    if (!packProfile->isLoaded()) {
+        packProfile->load();
     }
 
     QSet<QString> addedPaths;
@@ -122,10 +135,37 @@ void OfflineDependencyCollector::collectLibraries(QList<OfflineFileEntry>& outFi
         return;
     }
 
+    if (!packProfile->isLoaded()) {
+        packProfile->load();
+    }
+
+    // Try loading component metadata from local disk into memory if not loaded
+    bool hasUnloadedComponent = false;
+    for (int i = 0; i < packProfile->rowCount(); ++i) {
+        auto comp = packProfile->getComponent(i);
+        if (!comp) {
+            continue;
+        }
+        if (!comp->m_metaVersion && !comp->m_file) {
+            auto metaVersion = APPLICATION->metadataIndex()->get(comp->m_uid, comp->m_version);
+            if (metaVersion && !metaVersion->isLoaded()) {
+                metaVersion->loadLocalFile();
+            }
+            if (metaVersion && metaVersion->isLoaded()) {
+                comp->m_metaVersion = metaVersion;
+            } else {
+                hasUnloadedComponent = true;
+            }
+        }
+    }
+    packProfile->invalidateLaunchProfile();
+
     auto profile = packProfile->getProfile();
-    if (!profile) {
-        outMissing.append(QObject::tr("Launch profile is not initialized."));
-        return;
+    if (!profile || hasUnloadedComponent) {
+        outMissing.append(QObject::tr("Required game libraries (instance has never been launched)."));
+        if (!profile) {
+            return;
+        }
     }
 
     if (packProfile->rowCount() > 0 && (profile->getLibraries().isEmpty() || !profile->getMainJar())) {
@@ -264,9 +304,13 @@ void OfflineDependencyCollector::collectAssets(QList<OfflineFileEntry>& outFiles
         return;
     }
 
+    if (!packProfile->isLoaded()) {
+        packProfile->load();
+    }
+
     auto profile = packProfile->getProfile();
     if (!profile) {
-        outMissing.append(QObject::tr("Launch profile is not initialized."));
+        outMissing.append(QObject::tr("Required game assets (instance has never been launched)."));
         return;
     }
 

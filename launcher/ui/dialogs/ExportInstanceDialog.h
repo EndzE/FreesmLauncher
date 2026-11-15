@@ -61,6 +61,7 @@ class ExportInstanceDialog : public QDialog {
     virtual void done(int result);
 
    private:
+    bool validateAndConfirmOffline();
     void doExport();
     QString ignoreFileName();
 

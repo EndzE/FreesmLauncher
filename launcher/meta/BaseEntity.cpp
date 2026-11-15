@@ -107,6 +107,29 @@ BaseEntity::LoadStatus BaseEntity::status() const
     return m_load_status;
 }
 
+bool BaseEntity::loadLocalFile()
+{
+    const QString fname = QDir("meta").absoluteFilePath(localFilename());
+    if (!QFile::exists(fname)) {
+        return false;
+    }
+    try {
+        auto fileData = FS::read(fname);
+        auto doc = Json::requireDocument(fileData, fname);
+        auto obj = Json::requireObject(doc, fname);
+        parse(obj);
+        m_file_sha256 = Hashing::hash(fileData, Hashing::Algorithm::Sha256);
+        if (m_sha256.isEmpty()) {
+            m_sha256 = m_file_sha256;
+        }
+        m_load_status = LoadStatus::Local;
+        return true;
+    } catch (const Exception& e) {
+        qCritical() << QString("Unable to parse file %1: %2").arg(fname, e.cause());
+        return false;
+    }
+}
+
 BaseEntityLoadTask::BaseEntityLoadTask(BaseEntity* parent, Net::Mode mode, bool forceReload)
     : m_entity(parent), m_mode(mode), m_force_reload(forceReload)
 {}
@@ -176,7 +199,14 @@ void BaseEntityLoadTask::executeTask()
     dl->addValidator(new ParsingValidator(m_entity));
     m_task->addNetAction(dl);
     m_task->setAskRetry(false);
-    connect(m_task.get(), &Task::failed, this, &BaseEntityLoadTask::emitFailed);
+    connect(m_task.get(), &Task::failed, this, [this](const QString& reason) {
+        if (m_entity->m_load_status != BaseEntity::LoadStatus::NotLoaded) {
+            qWarning() << "Failed to update meta file" << m_entity->localFilename() << "from remote, falling back to local copy:" << reason;
+            emitSucceeded();
+        } else {
+            emitFailed(reason);
+        }
+    });
     connect(m_task.get(), &Task::succeeded, this, [this]() {
         m_entity->m_load_status = BaseEntity::LoadStatus::Remote;
         m_entity->m_file_sha256 = m_entity->m_sha256;

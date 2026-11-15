@@ -41,6 +41,9 @@
         <property name="text">
          <string>Export as fully offline bundle (include libraries, assets, and metadata)</string>
         </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
        </widget>
       </item>
       <item>
@@ -58,7 +61,7 @@
         <item>
          <widget class="QCheckBox" name="includeLibrariesCheckBox">
           <property name="enabled">
-           <bool>false</bool>
+           <bool>true</bool>
           </property>
           <property name="text">
            <string>Include Libraries</string>
@@ -71,7 +74,7 @@
         <item>
          <widget class="QCheckBox" name="includeAssetsCheckBox">
           <property name="enabled">
-           <bool>false</bool>
+           <bool>true</bool>
           </property>
           <property name="text">
            <string>Include Game Assets</string>
@@ -84,7 +87,7 @@
         <item>
          <widget class="QCheckBox" name="includeMetadataCheckBox">
           <property name="enabled">
-           <bool>false</bool>
+           <bool>true</bool>
           </property>
           <property name="text">
            <string>Include Component Metadata</string>
