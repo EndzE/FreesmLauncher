@@ -54,6 +54,8 @@
 #include "tasks/Task.h"
 
 #include "net/ApiDownload.h"
+#include "net/HttpMetaCache.h"
+#include "meta/Index.h"
 
 #include <QFileInfo>
 #include <QtConcurrentRun>
@@ -340,6 +342,35 @@ void InstanceImportTask::processTechnic()
     packProcessor->run(m_globalSettings, name(), m_instIcon, m_stagingPath);
 }
 
+namespace {
+bool mergeDirectory(const QString& sourceDir, const QString& targetDir)
+{
+    QDir source(sourceDir);
+    if (!source.exists()) {
+        return true;
+    }
+
+    QDirIterator it(sourceDir, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QString srcFilePath = it.next();
+        QString relativePath = source.relativeFilePath(srcFilePath);
+        QString dstFilePath = FS::PathCombine(targetDir, relativePath);
+
+        FS::ensureFilePathExists(dstFilePath);
+        if (QFile::exists(dstFilePath)) {
+            if (QFileInfo(srcFilePath).size() == QFileInfo(dstFilePath).size()) {
+                continue;
+            }
+            QFile::remove(dstFilePath);
+        }
+        if (!QFile::copy(srcFilePath, dstFilePath)) {
+            qWarning() << "Failed to copy offline file:" << srcFilePath << "to" << dstFilePath;
+        }
+    }
+    return true;
+}
+}  // namespace
+
 void InstanceImportTask::processMultiMC()
 {
     QString configPath = FS::PathCombine(m_stagingPath, "instance.cfg");
@@ -364,6 +395,60 @@ void InstanceImportTask::processMultiMC()
 
         installIcon(instance.instanceRoot(), m_instIcon);
     }
+
+    // Process offline bundle dependencies if present
+    QString offlineDir = FS::PathCombine(m_stagingPath, ".offline");
+    if (QDir(offlineDir).exists()) {
+        setStatus(tr("Installing offline dependencies..."));
+
+        QString librariesTarget = APPLICATION->metacache()->getBasePath("libraries");
+        if (librariesTarget.isEmpty()) {
+            librariesTarget = QDir("libraries").absolutePath();
+        }
+        QString assetsTarget = QDir("assets").absolutePath();
+        QString metaTarget = QDir("meta").absolutePath();
+
+        QString offlineLibraries = FS::PathCombine(offlineDir, "libraries");
+        QString offlineAssets = FS::PathCombine(offlineDir, "assets");
+        QString offlineMeta = FS::PathCombine(offlineDir, "meta");
+
+        if (QDir(offlineLibraries).exists()) {
+            mergeDirectory(offlineLibraries, librariesTarget);
+        }
+        if (QDir(offlineAssets).exists()) {
+            mergeDirectory(offlineAssets, assetsTarget);
+        }
+        if (QDir(offlineMeta).exists()) {
+            mergeDirectory(offlineMeta, metaTarget);
+        }
+
+        // Cleanup .offline container
+        FS::deletePath(offlineDir);
+
+        // Metadata refresh
+        if (APPLICATION->metadataIndex()) {
+            APPLICATION->metadataIndex()->loadTask(Net::Mode::Offline, true)->start();
+        }
+    } else {
+        // Fallback for root-level structure
+        QString rootAssets = FS::PathCombine(m_stagingPath, "assets");
+        QString rootMeta = FS::PathCombine(m_stagingPath, "meta");
+
+        if (QDir(rootAssets).exists()) {
+            QString assetsTarget = QDir("assets").absolutePath();
+            mergeDirectory(rootAssets, assetsTarget);
+            FS::deletePath(rootAssets);
+        }
+        if (QDir(rootMeta).exists()) {
+            QString metaTarget = QDir("meta").absolutePath();
+            mergeDirectory(rootMeta, metaTarget);
+            FS::deletePath(rootMeta);
+            if (APPLICATION->metadataIndex()) {
+                APPLICATION->metadataIndex()->loadTask(Net::Mode::Offline, true)->start();
+            }
+        }
+    }
+
     emitSucceeded();
 }
 

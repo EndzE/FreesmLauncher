@@ -31,6 +31,88 @@
     </widget>
    </item>
    <item>
+    <widget class="QGroupBox" name="offlineGroupBox">
+     <property name="title">
+      <string>Offline Export Options</string>
+     </property>
+     <layout class="QVBoxLayout" name="offlineLayout">
+      <item>
+       <widget class="QCheckBox" name="exportOfflineCheckBox">
+        <property name="text">
+         <string>Export as fully offline bundle (include libraries, assets, and metadata)</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="offlineInfoLabel">
+        <property name="text">
+         <string>Includes all libraries, assets, and component metadata required to launch this instance offline without internet access.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="offlineDetailsLayout">
+        <item>
+         <widget class="QCheckBox" name="includeLibrariesCheckBox">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="text">
+           <string>Include Libraries</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="includeAssetsCheckBox">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="text">
+           <string>Include Game Assets</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="includeMetadataCheckBox">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="text">
+           <string>Include Component Metadata</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="offlineSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QDialogButtonBox" name="buttonBox">
      <property name="orientation">
       <enum>Qt::Horizontal</enum>

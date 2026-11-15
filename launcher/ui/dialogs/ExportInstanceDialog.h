@@ -37,10 +37,13 @@
 #pragma once
 
 #include <QDialog>
+#include <QFutureWatcher>
 #include <QModelIndex>
 #include <memory>
+#include <tuple>
 #include "FastFileIconProvider.h"
 #include "FileIgnoreProxy.h"
+#include "minecraft/OfflineDependencyCollector.h"
 
 class BaseInstance;
 
@@ -66,7 +69,10 @@ class ExportInstanceDialog : public QDialog {
     BaseInstance* m_instance;
     FileIgnoreProxy* m_proxyModel;
     FastFileIconProvider m_icons;
+    QFutureWatcher<OfflineStats>* m_statsWatcher = nullptr;
 
    private slots:
     void rowsInserted(QModelIndex parent, int top, int bottom);
+    void offlineExportToggled(bool checked);
+    void updateOfflineStats();
 };

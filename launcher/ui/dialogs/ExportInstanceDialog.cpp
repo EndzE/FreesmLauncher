@@ -41,9 +41,14 @@
 #include <QFileDialog>
 #include <QFileSystemModel>
 #include <QMessageBox>
+#include <QtConcurrent>
 #include "FileIgnoreProxy.h"
 #include "QObjectPtr.h"
 #include "archive/ExportToZipTask.h"
+#include "minecraft/MinecraftInstance.h"
+#include "minecraft/OfflineDependencyCollector.h"
+#include "tasks/SequentialTask.h"
+#include "StringUtils.h"
 #include "ui/dialogs/CustomMessageBox.h"
 #include "ui/dialogs/ProgressDialog.h"
 #include "ui_ExportInstanceDialog.h"
@@ -90,10 +95,26 @@ ExportInstanceDialog::ExportInstanceDialog(BaseInstance* instance, QWidget* pare
 
     m_ui->buttonBox->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
     m_ui->buttonBox->button(QDialogButtonBox::Ok)->setText(tr("OK"));
+
+    auto mcInstance = dynamic_cast<MinecraftInstance*>(m_instance);
+    if (!mcInstance) {
+        m_ui->offlineGroupBox->hide();
+    } else {
+        connect(m_ui->exportOfflineCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::offlineExportToggled);
+        connect(m_ui->includeLibrariesCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
+        connect(m_ui->includeAssetsCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
+        connect(m_ui->includeMetadataCheckBox, &QCheckBox::toggled, this, &ExportInstanceDialog::updateOfflineStats);
+    }
 }
 
 ExportInstanceDialog::~ExportInstanceDialog()
 {
+    if (m_statsWatcher) {
+        m_statsWatcher->cancel();
+        m_statsWatcher->waitForFinished();
+        delete m_statsWatcher;
+        m_statsWatcher = nullptr;
+    }
     delete m_ui;
 }
 
@@ -153,6 +174,69 @@ void ExportInstanceDialog::doExport()
 
     auto task = makeShared<MMCZip::ExportToZipTask>(output, m_instance->instanceRoot(), files, "", true);
 
+    if (m_ui->exportOfflineCheckBox->isChecked()) {
+        auto mcInstance = dynamic_cast<MinecraftInstance*>(m_instance);
+        if (mcInstance) {
+            OfflineExportOptions options;
+            options.includeLibraries = m_ui->includeLibrariesCheckBox->isChecked();
+            options.includeAssets = m_ui->includeAssetsCheckBox->isChecked();
+            options.includeMetadata = m_ui->includeMetadataCheckBox->isChecked();
+
+            OfflineDependencyCollector collector(mcInstance, options);
+            QList<OfflineFileEntry> offlineFiles;
+            QStringList missingFiles;
+            collector.collect(offlineFiles, missingFiles);
+
+            if (!missingFiles.isEmpty()) {
+                auto reply = QMessageBox::question(
+                    this,
+                    tr("Missing Offline Dependencies"),
+                    tr("Some required files are missing locally (%1 missing).\nWould you like to download them now so they can be included in the offline bundle?")
+                        .arg(missingFiles.size()),
+                    QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
+                    QMessageBox::Yes);
+
+                if (reply == QMessageBox::Cancel) {
+                    QDialog::done(QDialog::Rejected);
+                    return;
+                } else if (reply == QMessageBox::Yes) {
+                    auto updateTasks = mcInstance->createUpdateTask();
+                    if (!updateTasks.isEmpty()) {
+                        auto seqTask = makeShared<SequentialTask>();
+                        for (auto t : updateTasks) {
+                            seqTask->addTask(t);
+                        }
+                        ProgressDialog tDialog(this);
+                        tDialog.setSkipButton(true, tr("Abort"));
+                        auto res = tDialog.execWithTask(seqTask.get());
+                        if (res == QDialog::Rejected) {
+                            auto contReply = QMessageBox::warning(
+                                this,
+                                tr("Download Incomplete"),
+                                tr("Some files could not be downloaded. Do you want to continue exporting with the files currently available?"),
+                                QMessageBox::Yes | QMessageBox::No,
+                                QMessageBox::No);
+                            if (contReply != QMessageBox::Yes) {
+                                QDialog::done(QDialog::Rejected);
+                                return;
+                            }
+                        }
+                    }
+                    offlineFiles.clear();
+                    missingFiles.clear();
+                    collector.collect(offlineFiles, missingFiles);
+                }
+            }
+
+            QByteArray manifestData = collector.createManifest(offlineFiles);
+            task->addExtraFile(".offline/manifest.json", manifestData);
+
+            for (const auto& file : offlineFiles) {
+                task->addExtraDiskFile(file.diskPath, file.archivePath);
+            }
+        }
+    }
+
     connect(task.get(), &Task::failed, this,
             [this, output](QString reason) { CustomMessageBox::selectable(this, tr("Error"), reason, QMessageBox::Critical)->show(); });
     connect(task.get(), &Task::finished, this, [task] { task->deleteLater(); });
@@ -161,6 +245,73 @@ void ExportInstanceDialog::doExport()
     progress.setSkipButton(true, tr("Abort"));
     auto result = progress.execWithTask(task.get());
     QDialog::done(result);
+}
+
+void ExportInstanceDialog::offlineExportToggled(bool checked)
+{
+    m_ui->includeLibrariesCheckBox->setEnabled(checked);
+    m_ui->includeAssetsCheckBox->setEnabled(checked);
+    m_ui->includeMetadataCheckBox->setEnabled(checked);
+    updateOfflineStats();
+}
+
+void ExportInstanceDialog::updateOfflineStats()
+{
+    if (!m_ui->exportOfflineCheckBox->isChecked()) {
+        m_ui->offlineInfoLabel->setText(tr("Includes all libraries, assets, and component metadata required to launch this instance offline without internet access."));
+        return;
+    }
+
+    auto mcInstance = dynamic_cast<MinecraftInstance*>(m_instance);
+    if (!mcInstance) {
+        return;
+    }
+
+    m_ui->offlineInfoLabel->setText(tr("Calculating offline dependencies..."));
+
+    OfflineExportOptions options;
+    options.includeLibraries = m_ui->includeLibrariesCheckBox->isChecked();
+    options.includeAssets = m_ui->includeAssetsCheckBox->isChecked();
+    options.includeMetadata = m_ui->includeMetadataCheckBox->isChecked();
+
+    if (m_statsWatcher) {
+        m_statsWatcher->cancel();
+        m_statsWatcher->waitForFinished();
+        delete m_statsWatcher;
+        m_statsWatcher = nullptr;
+    }
+
+    auto future = QtConcurrent::run(QThreadPool::globalInstance(), [mcInstance, options]() {
+        OfflineDependencyCollector collector(mcInstance, options);
+        QList<OfflineFileEntry> files;
+        QStringList missing;
+        collector.collect(files, missing);
+
+        return OfflineDependencyCollector::computeStats(files, missing);
+    });
+
+    m_statsWatcher = new QFutureWatcher<OfflineStats>(this);
+    connect(m_statsWatcher, &QFutureWatcher<OfflineStats>::finished, this, [this]() {
+        if (!m_statsWatcher || m_statsWatcher->isCanceled()) {
+            return;
+        }
+        OfflineStats stats = m_statsWatcher->result();
+        if (!m_ui->exportOfflineCheckBox->isChecked()) {
+            return;
+        }
+
+        QString info = tr("Includes ~%1 of assets (%2 files), ~%3 of libraries (%4 files), and %5 metadata files (~%6) (Total: ~%7).")
+                           .arg(StringUtils::humanReadableFileSize(stats.assetSize), QString::number(stats.assetCount),
+                                StringUtils::humanReadableFileSize(stats.libSize), QString::number(stats.libCount),
+                                QString::number(stats.metaCount),
+                                StringUtils::humanReadableFileSize(stats.metaSize),
+                                StringUtils::humanReadableFileSize(stats.totalSize));
+        if (stats.missingCount > 0) {
+            info += "\n" + tr("Note: %1 required file(s) are missing locally and can be downloaded during export.").arg(stats.missingCount);
+        }
+        m_ui->offlineInfoLabel->setText(info);
+    });
+    m_statsWatcher->setFuture(future);
 }
 
 void ExportInstanceDialog::done(int result)
