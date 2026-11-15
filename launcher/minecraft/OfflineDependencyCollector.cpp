@@ -495,10 +495,26 @@ void OfflineDependencyCollector::collectLibraries(QList<OfflineFileEntry>& outFi
                 }
             }
         } else if (uid == "net.neoforged") {
-            // NeoForge patched client jar
+            // NeoForge patched client jar:
+            // NeoForge 21.1+ (1.21+) uses net.neoforged:neoforge:<version>:client
+            // NeoForge 20.x (1.20.x) uses net.neoforged:minecraft-client-patched:<version>
+            GradleSpecifier neoforgeClientSpec(QString("net.neoforged:neoforge:%1:client").arg(version));
             GradleSpecifier patchedSpec(QString("net.neoforged:minecraft-client-patched:%1").arg(version));
-            if (patchedSpec.valid()) {
-                allJars.append(FS::PathCombine(librariesBasePath, patchedSpec.toPath()));
+
+            QString neoDisk = FS::PathCombine(librariesBasePath, neoforgeClientSpec.toPath());
+            QString patchedDisk = FS::PathCombine(librariesBasePath, patchedSpec.toPath());
+
+            if (QFileInfo::exists(neoDisk)) {
+                allJars.append(neoDisk);
+            } else if (QFileInfo::exists(patchedDisk)) {
+                allJars.append(patchedDisk);
+            } else {
+                // Not found on disk: instance is unlaunched, record expected client jar as missing
+                if (!version.isEmpty() && ::Version(version) >= ::Version("21.0")) {
+                    allJars.append(neoDisk);
+                } else {
+                    allJars.append(patchedDisk);
+                }
             }
             // NeoForge Mojang mappings
             if (!mcVersion.isEmpty()) {
