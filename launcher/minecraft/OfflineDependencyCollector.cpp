@@ -39,6 +39,7 @@
 #include "minecraft/LaunchProfile.h"
 #include "minecraft/Library.h"
 #include "minecraft/MinecraftInstance.h"
+#include "minecraft/OneSixVersionFormat.h"
 #include "minecraft/PackProfile.h"
 #include "net/HttpMetaCache.h"
 
@@ -117,13 +118,26 @@ void OfflineDependencyCollector::collectMetadata(QList<OfflineFileEntry>& outFil
             continue;
         }
 
-        // Component index (e.g. meta/net.minecraft/index.json)
-        checkAndAdd(uid + "/index.json", false);
-
         // Component version file (e.g. meta/net.minecraft/1.16.5.json)
         if (!version.isEmpty()) {
-            checkAndAdd(uid + "/" + version + ".json", true);
+            QString relVersionPath = uid + "/" + version + ".json";
+            QString diskVersionPath = FS::PathCombine(metaBasePath, relVersionPath);
+            if (!QFileInfo::exists(diskVersionPath)) {
+                auto vfile = comp->getVersionFile();
+                if (!vfile && comp->m_metaVersion) {
+                    vfile = comp->m_metaVersion->data();
+                }
+                if (vfile) {
+                    FS::ensureFilePathExists(diskVersionPath);
+                    auto doc = OneSixVersionFormat::versionFileToJson(vfile);
+                    FS::write(diskVersionPath, doc.toJson(QJsonDocument::Indented));
+                }
+            }
+            checkAndAdd(relVersionPath, true);
         }
+
+        // Component index (e.g. meta/net.minecraft/index.json)
+        checkAndAdd(uid + "/index.json", false);
     }
 }
 

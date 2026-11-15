@@ -45,6 +45,9 @@
 #include "FileIgnoreProxy.h"
 #include "QObjectPtr.h"
 #include "archive/ExportToZipTask.h"
+#include "Application.h"
+#include "meta/Index.h"
+#include "minecraft/Component.h"
 #include "minecraft/MinecraftInstance.h"
 #include "minecraft/MinecraftLoadAndCheck.h"
 #include "minecraft/OfflineDependencyCollector.h"
@@ -348,9 +351,27 @@ bool ExportInstanceDialog::downloadMissingDependencies()
     }
 
     auto seqTask = makeShared<SequentialTask>();
-    // 1. Resolve components and metadata online
+
+    // 1. Ensure all component metadata is downloaded online
+    auto packProfile = mcInstance->getPackProfile();
+    if (packProfile) {
+        for (int i = 0; i < packProfile->rowCount(); ++i) {
+            auto comp = packProfile->getComponent(i);
+            if (!comp) continue;
+            QString uid = comp->getID();
+            QString version = comp->getVersion();
+            if (!uid.isEmpty() && !version.isEmpty()) {
+                QString metaPath = FS::PathCombine(QDir("meta").absolutePath(), uid + "/" + version + ".json");
+                if (!QFileInfo::exists(metaPath)) {
+                    seqTask->addTask(APPLICATION->metadataIndex()->loadVersion(uid, version, Net::Mode::Online));
+                }
+            }
+        }
+    }
+
+    // 2. Resolve components and metadata online
     seqTask->addTask(makeShared<MinecraftLoadAndCheck>(mcInstance, Net::Mode::Online));
-    // 2. Download all folders, libraries, and assets
+    // 3. Download all folders, libraries, and assets
     for (auto t : mcInstance->createUpdateTask()) {
         seqTask->addTask(t);
     }
