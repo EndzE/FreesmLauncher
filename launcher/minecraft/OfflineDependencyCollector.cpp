@@ -30,6 +30,7 @@
 #include "BuildConfig.h"
 #include "FileSystem.h"
 #include "Json.h"
+#include "archive/ArchiveReader.h"
 #include "meta/BaseEntity.h"
 #include "meta/Index.h"
 #include "meta/Version.h"
@@ -234,7 +235,173 @@ void OfflineDependencyCollector::collectLibraries(QList<OfflineFileEntry>& outFi
         }
     }
 
-    // 6. Inspect classifiers from mojangDownloads and nativeClassifiers
+    // 6. Inspect install_profile.json in any installer jars (NeoForge / Forge installer)
+    for (const auto& jarCandidate : allJars) {
+        if (!jarCandidate.contains("installer", Qt::CaseInsensitive) || !jarCandidate.endsWith(".jar", Qt::CaseInsensitive)) {
+            continue;
+        }
+        QString jarPath = jarCandidate;
+        if (QDir::isRelativePath(jarPath)) {
+            jarPath = FS::PathCombine(cleanLibBase, jarPath);
+        }
+        if (!QFileInfo::exists(jarPath)) {
+            continue;
+        }
+
+        try {
+            MMCZip::ArchiveReader reader(jarPath);
+            auto ipFile = reader.goToFile("install_profile.json");
+            if (!ipFile) {
+                ipFile = reader.goToFile("/install_profile.json");
+            }
+            if (ipFile) {
+                QByteArray ipBytes = ipFile->readAll();
+                if (!ipBytes.isEmpty()) {
+                    auto doc = Json::requireDocument(ipBytes, "install_profile.json");
+                    auto root = Json::requireObject(doc, "install_profile.json");
+
+                    // 1. Data section: e.g. MOJMAPS, PATCHED, etc.
+                    if (root.contains("data") && root["data"].isObject()) {
+                        auto dataObj = root["data"].toObject();
+                        for (auto it = dataObj.begin(); it != dataObj.end(); ++it) {
+                            QString valStr;
+                            if (it.value().isObject()) {
+                                auto sideObj = it.value().toObject();
+                                if (sideObj.contains("client")) {
+                                    valStr = sideObj["client"].toString();
+                                }
+                            } else if (it.value().isString()) {
+                                valStr = it.value().toString();
+                            }
+                            if (valStr.startsWith('[') && valStr.endsWith(']')) {
+                                GradleSpecifier spec(valStr.mid(1, valStr.length() - 2));
+                                if (spec.valid()) {
+                                    allJars.append(FS::PathCombine(librariesBasePath, spec.toPath()));
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Processors section
+                    if (root.contains("processors") && root["processors"].isArray()) {
+                        for (const auto& pVal : root["processors"].toArray()) {
+                            if (!pVal.isObject()) continue;
+                            auto pObj = pVal.toObject();
+                            if (pObj.contains("sides") && pObj["sides"].isArray()) {
+                                bool forClient = false;
+                                for (const auto& s : pObj["sides"].toArray()) {
+                                    if (s.toString() == "client") {
+                                        forClient = true;
+                                        break;
+                                    }
+                                }
+                                if (!forClient) continue;
+                            }
+
+                            if (pObj.contains("jar")) {
+                                GradleSpecifier spec(pObj["jar"].toString());
+                                if (spec.valid()) {
+                                    allJars.append(FS::PathCombine(librariesBasePath, spec.toPath()));
+                                }
+                            }
+
+                            if (pObj.contains("classpath") && pObj["classpath"].isArray()) {
+                                for (const auto& cpVal : pObj["classpath"].toArray()) {
+                                    GradleSpecifier spec(cpVal.toString());
+                                    if (spec.valid()) {
+                                        allJars.append(FS::PathCombine(librariesBasePath, spec.toPath()));
+                                    }
+                                }
+                            }
+
+                            if (pObj.contains("args") && pObj["args"].isArray()) {
+                                for (const auto& argVal : pObj["args"].toArray()) {
+                                    QString argStr = argVal.toString();
+                                    if (argStr.startsWith('[') && argStr.endsWith(']')) {
+                                        GradleSpecifier spec(argStr.mid(1, argStr.length() - 2));
+                                        if (spec.valid()) {
+                                            allJars.append(FS::PathCombine(librariesBasePath, spec.toPath()));
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (pObj.contains("outputs") && pObj["outputs"].isObject()) {
+                                auto outObj = pObj["outputs"].toObject();
+                                for (auto it = outObj.begin(); it != outObj.end(); ++it) {
+                                    QString outStr = it.value().toString();
+                                    if (outStr.startsWith('[') && outStr.endsWith(']')) {
+                                        GradleSpecifier spec(outStr.mid(1, outStr.length() - 2));
+                                        if (spec.valid()) {
+                                            allJars.append(FS::PathCombine(librariesBasePath, spec.toPath()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Libraries in install_profile
+                    if (root.contains("libraries") && root["libraries"].isArray()) {
+                        for (const auto& libVal : root["libraries"].toArray()) {
+                            if (!libVal.isObject()) continue;
+                            auto libObj = libVal.toObject();
+                            if (libObj.contains("name")) {
+                                GradleSpecifier spec(libObj["name"].toString());
+                                if (spec.valid()) {
+                                    allJars.append(FS::PathCombine(librariesBasePath, spec.toPath()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (...) {
+            // Ignore unreadable or corrupted installer jars
+        }
+    }
+
+    // 7. Direct component fallbacks (covers unlaunched instances or missing installer jars)
+    QString mcVersion = packProfile->getComponentVersion("net.minecraft");
+    for (int i = 0; i < packProfile->rowCount(); ++i) {
+        auto comp = packProfile->getComponent(i);
+        if (!comp) continue;
+        QString uid = comp->getID();
+        QString version = comp->getVersion();
+
+        if (uid == "net.minecraftforge") {
+            // Forge client jar
+            GradleSpecifier clientSpec(QString("net.minecraftforge:forge:%1:client").arg(version));
+            if (clientSpec.valid()) {
+                allJars.append(FS::PathCombine(librariesBasePath, clientSpec.toPath()));
+            }
+            // Mojang mappings for modern Forge (1.20+)
+            if (!mcVersion.isEmpty()) {
+                GradleSpecifier mapSpec(QString("net.minecraft:client:%1:mappings@txt").arg(mcVersion));
+                if (mapSpec.valid()) {
+                    QString mapDisk = FS::PathCombine(librariesBasePath, mapSpec.toPath());
+                    if (QFileInfo::exists(mapDisk)) {
+                        allJars.append(mapDisk);
+                    }
+                }
+            }
+        } else if (uid == "net.neoforged") {
+            // NeoForge patched client jar
+            GradleSpecifier patchedSpec(QString("net.neoforged:minecraft-client-patched:%1").arg(version));
+            if (patchedSpec.valid()) {
+                allJars.append(FS::PathCombine(librariesBasePath, patchedSpec.toPath()));
+            }
+            // NeoForge Mojang mappings
+            if (!mcVersion.isEmpty()) {
+                GradleSpecifier mapSpec(QString("net.minecraft:client:%1:mappings@txt").arg(mcVersion));
+                if (mapSpec.valid()) {
+                    allJars.append(FS::PathCombine(librariesBasePath, mapSpec.toPath()));
+                }
+            }
+        }
+    }
+
+    // 8. Inspect classifiers from mojangDownloads and nativeClassifiers
     QList<LibraryPtr> allLibs;
     if (profile->getMainJar()) allLibs.append(profile->getMainJar());
     allLibs.append(profile->getLibraries());
