@@ -24,27 +24,42 @@
 #include "settings/SettingsObject.h"
 
 struct RuntimeContext {
-    QString javaArchitecture;
-    QString javaRealArchitecture;
+    QString javaArchitecture = SysInfo::useQTForArch().contains("64") ? "64" : "32";
+    QString javaRealArchitecture = SysInfo::useQTForArch();
     QString system = SysInfo::currentSystem();
 
     QString mappedJavaRealArchitecture() const
     {
-        if (javaRealArchitecture == "amd64")
+        QString arch = javaRealArchitecture;
+        if (arch.isEmpty()) {
+            arch = SysInfo::useQTForArch();
+        }
+        if (arch == "amd64")
             return "x86_64";
-        if (javaRealArchitecture == "i386" || javaRealArchitecture == "i686")
+        if (arch == "i386" || arch == "i686")
             return "x86";
-        if (javaRealArchitecture == "aarch64")
+        if (arch == "aarch64")
             return "arm64";
-        if (javaRealArchitecture == "arm" || javaRealArchitecture == "armhf")
+        if (arch == "arm" || arch == "armhf")
             return "arm32";
-        return javaRealArchitecture;
+        return arch;
     }
 
     void updateFromInstanceSettings(SettingsObject* instanceSettings)
     {
-        javaArchitecture = instanceSettings->get("JavaArchitecture").toString();
-        javaRealArchitecture = instanceSettings->get("JavaRealArchitecture").toString();
+        auto javaArch = instanceSettings->get("JavaArchitecture").toString();
+        if (!javaArch.isEmpty()) {
+            javaArchitecture = javaArch;
+        } else if (javaArchitecture.isEmpty()) {
+            javaArchitecture = SysInfo::useQTForArch().contains("64") ? "64" : "32";
+        }
+
+        auto javaRealArch = instanceSettings->get("JavaRealArchitecture").toString();
+        if (!javaRealArch.isEmpty()) {
+            javaRealArchitecture = javaRealArch;
+        } else if (javaRealArchitecture.isEmpty()) {
+            javaRealArchitecture = SysInfo::useQTForArch();
+        }
     }
 
     QString getClassifier() const { return system + "-" + mappedJavaRealArchitecture(); }

@@ -151,15 +151,19 @@ class Library {
 
     QString getCompatibleNative(const RuntimeContext& runtimeContext) const;
 
-   private: /* methods */
-    /// the default storage prefix used by Prism Launcher
-    static QString defaultStoragePrefix();
-
     /// Get the prefix - root of the storage to be used
     QString storagePrefix() const;
 
     /// Get the relative file path where the library should be saved
     QString storageSuffix(const RuntimeContext& runtimeContext) const;
+
+    const QMap<QString, QString>& nativeClassifiers() const { return m_nativeClassifiers; }
+
+    MojangLibraryDownloadInfo::Ptr mojangDownloads() const { return m_mojangDownloads; }
+
+   private: /* methods */
+    /// the default storage prefix used by Prism Launcher
+    static QString defaultStoragePrefix();
 
     QString hint() const { return m_hint; }
 

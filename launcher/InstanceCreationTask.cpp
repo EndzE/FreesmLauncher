@@ -97,6 +97,9 @@ void InstanceCreationTask::executeTask()
         }
         connect(task.get(), &Task::finished, this, [this, task] {
             if (task->wasSuccessful() || m_abort) {
+                if (m_instance) {
+                    m_instance->saveNow();
+                }
                 emitSucceeded();
             } else {
                 emitFailed(tr("Could not download game files: %1").arg(task->failReason()));

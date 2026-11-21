@@ -61,7 +61,8 @@ void VerifyJavaInstall::executeTask()
                      MessageLevel::Error);
     }
 
-    auto compatibleMajors = packProfile->getProfile()->getCompatibleJavaMajors();
+    auto profile = packProfile ? packProfile->getProfile() : nullptr;
+    auto compatibleMajors = profile ? profile->getCompatibleJavaMajors() : QList<int>();
 
     JavaVersion javaVersion(storedVersion);
 

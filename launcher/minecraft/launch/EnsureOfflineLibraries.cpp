@@ -26,6 +26,11 @@ EnsureOfflineLibraries::EnsureOfflineLibraries(LaunchTask* parent, MinecraftInst
 void EnsureOfflineLibraries::executeTask()
 {
     const auto profile = m_instance->getPackProfile()->getProfile();
+    if (!profile) {
+        emit logLine(tr("Failed to load instance profile. Please make sure the instance metadata is valid."), MessageLevel::Fatal);
+        emitFailed("Required libraries are missing (instance profile not loaded)");
+        return;
+    }
     QStringList allJars;
     profile->getLibraryFiles(m_instance->runtimeContext(), allJars, allJars, m_instance->getLocalLibraryPath(), m_instance->binRoot(),
                              false);

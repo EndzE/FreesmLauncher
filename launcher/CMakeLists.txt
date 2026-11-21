@@ -323,6 +323,8 @@ set(MINECRAFT_SOURCES
     minecraft/PackProfile.h
     minecraft/ComponentUpdateTask.cpp
     minecraft/ComponentUpdateTask.h
+    minecraft/OfflineDependencyCollector.cpp
+    minecraft/OfflineDependencyCollector.h
     minecraft/MinecraftLoadAndCheck.h
     minecraft/MinecraftLoadAndCheck.cpp
     minecraft/MojangVersionFormat.cpp

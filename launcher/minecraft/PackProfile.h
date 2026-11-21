@@ -114,6 +114,9 @@ class PackProfile : public QAbstractListModel {
 
     bool revertToBase(int index);
 
+    bool isLoaded() const;
+    Result load();
+
     /// reload the list, reload all components, resolve dependencies
     Result reload(Net::Mode netmode);
 
@@ -182,7 +185,6 @@ class PackProfile : public QAbstractListModel {
     void disableInteraction(bool disable);
 
    private:
-    Result load();
     bool installJarMods_internal(QStringList filepaths);
     bool installCustomJar_internal(QString filepath);
     bool installAgents_internal(QStringList filepaths);

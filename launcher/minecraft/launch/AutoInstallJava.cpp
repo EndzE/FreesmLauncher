@@ -72,9 +72,11 @@ void AutoInstallJava::executeTask()
         auto javas = APPLICATION->javalist();
         m_current_task = javas->getLoadTask();
         connect(m_current_task.get(), &Task::finished, this, [this, javas, packProfile] {
+            auto profile = packProfile ? packProfile->getProfile() : nullptr;
+            auto compatibleMajors = profile ? profile->getCompatibleJavaMajors() : QList<int>();
             for (auto i = 0; i < javas->count(); i++) {
                 auto java = std::dynamic_pointer_cast<JavaInstall>(javas->at(i));
-                if (java && packProfile->getProfile()->getCompatibleJavaMajors().contains(java->id.major())) {
+                if (java && compatibleMajors.contains(java->id.major())) {
                     if (!java->is_64bit) {
                         emit logLine(tr("The automatic Java mechanism detected a 32-bit installation of Java."), MessageLevel::Launcher);
                     }
@@ -99,7 +101,8 @@ void AutoInstallJava::executeTask()
         emitSucceeded();
         return;
     }
-    auto wantedJavaName = packProfile->getProfile()->getCompatibleJavaName();
+    auto profile = packProfile ? packProfile->getProfile() : nullptr;
+    auto wantedJavaName = profile ? profile->getCompatibleJavaName() : QString();
     if (wantedJavaName.isEmpty()) {
         emit logLine(tr("Your meta information is out of date or doesn't have the information necessary to determine what installation of "
                         "Java should be used. "
@@ -209,7 +212,8 @@ void AutoInstallJava::tryNextMajorJava()
         return;
     auto versionList = APPLICATION->metadataIndex()->get("net.minecraft.java");
     auto packProfile = m_instance->getPackProfile();
-    auto wantedJavaName = packProfile->getProfile()->getCompatibleJavaName();
+    auto profile = packProfile ? packProfile->getProfile() : nullptr;
+    auto wantedJavaName = profile ? profile->getCompatibleJavaName() : QString();
     auto majorJavaVersions = packProfile->getProfile()->getCompatibleJavaMajors();
     if (m_majorJavaVersionIndex >= majorJavaVersions.length()) {
         emit logLine(

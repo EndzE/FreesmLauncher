@@ -25,7 +25,7 @@ namespace MMCZip {
 void ExportToZipTask::executeTask()
 {
     setStatus("Adding files...");
-    setProgress(0, m_files.length());
+    setProgress(0, m_files.length() + m_extraFiles.size() + m_extraDiskFiles.length());
     m_buildZipFuture = QtConcurrent::run(QThreadPool::globalInstance(), [this]() { return exportZip(); });
     connect(&m_buildZipWatcher, &QFutureWatcher<ZipResult>::finished, this, &ExportToZipTask::finish);
     m_buildZipWatcher.setFuture(m_buildZipFuture);
@@ -43,9 +43,11 @@ auto ExportToZipTask::exportZip() -> ZipResult
     for (auto fileName : m_extraFiles.keys()) {
         if (m_buildZipFuture.isCanceled())
             return ZipResult();
+        setStatus(tr("Writing: %1").arg(fileName));
         if (!m_output.addFile(fileName, m_extraFiles[fileName])) {
             return ZipResult(tr("Could not add:") + fileName);
         }
+        setProgress(m_progress + 1, m_progressTotal);
     }
 
     for (const QFileInfo& file : m_files) {
@@ -65,6 +67,18 @@ auto ExportToZipTask::exportZip() -> ZipResult
 
         if (!m_excludeFiles.contains(relative) && !m_output.addFile(absolute, m_destinationPrefix + relative)) {
             return ZipResult(tr("Could not read and compress %1").arg(relative));
+        }
+    }
+
+    for (const auto& extraDiskFile : m_extraDiskFiles) {
+        if (m_buildZipFuture.isCanceled())
+            return ZipResult();
+
+        setStatus(tr("Compressing: %1").arg(extraDiskFile.second));
+        setProgress(m_progress + 1, m_progressTotal);
+
+        if (!m_output.addFile(extraDiskFile.first, extraDiskFile.second)) {
+            return ZipResult(tr("Could not read and compress %1").arg(extraDiskFile.first));
         }
     }
 

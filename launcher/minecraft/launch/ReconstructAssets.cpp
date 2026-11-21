@@ -23,8 +23,16 @@ void ReconstructAssets::executeTask()
 {
     auto instance = m_parent->instance();
     auto components = instance->getPackProfile();
-    auto profile = components->getProfile();
+    auto profile = components ? components->getProfile() : nullptr;
+    if (!profile) {
+        emitFailed(tr("Failed to load instance profile."));
+        return;
+    }
     auto assets = profile->getMinecraftAssets();
+    if (!assets) {
+        emitFailed(tr("Failed to load Minecraft assets information."));
+        return;
+    }
 
     if (!AssetsUtils::reconstructAssets(assets->id, instance->resourcesDir())) {
         emit logLine("Failed to reconstruct Minecraft assets.", MessageLevel::Error);

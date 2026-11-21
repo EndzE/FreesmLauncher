@@ -46,6 +46,8 @@ class ExportToZipTask : public Task {
 
     void setExcludeFiles(QStringList excludeFiles) { m_excludeFiles = excludeFiles; }
     void addExtraFile(QString fileName, QByteArray data) { m_extraFiles.insert(fileName, data); }
+    void addExtraDiskFile(QString diskPath, QString archivePath) { m_extraDiskFiles.append({ diskPath, archivePath }); }
+    void setExtraDiskFiles(QList<QPair<QString, QString>> extraDiskFiles) { m_extraDiskFiles = extraDiskFiles; }
 
     using ZipResult = std::optional<QString>;
 
@@ -65,6 +67,7 @@ class ExportToZipTask : public Task {
     bool m_followSymlinks;
     QStringList m_excludeFiles;
     QHash<QString, QByteArray> m_extraFiles;
+    QList<QPair<QString, QString>> m_extraDiskFiles;
 
     QFuture<ZipResult> m_buildZipFuture;
     QFutureWatcher<ZipResult> m_buildZipWatcher;
